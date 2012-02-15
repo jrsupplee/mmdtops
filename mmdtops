@@ -1,0 +1,318 @@
+#!/usr/bin/perl
+
+use strict;
+
+use Getopt::Long;
+use Config::IniFiles;
+use File::Temp;
+use Pod::Usage;
+
+my @defaults = (
+	'author',
+	'affiliation',
+	'email',
+	'address',
+	'phone',
+);
+
+my @order = (
+	'latex header',
+	'__FILE_META__',
+	'base header level',
+	'latex xslt',
+	'black and white',
+	'latex mode',
+	'theme',
+	'latex body',
+	'latex footer'
+);
+
+my %bin = (
+	multimarkdown 	=>	'multimarkdown',
+	pdflatex		=>	'pdflatex',
+	pslatex			=>	'pslatex',
+	dvips			=>	'dvips',
+);
+
+
+sub build_meta_hash {
+	my ($key, $value) = @_;
+
+	if (ref($value) eq 'ARRAY') {
+		return map { build_meta_hash( $key, $_ ) } @$value;
+	}
+
+	return { key => $key, value => $value };
+}
+
+
+sub build_meta_header {
+
+	my $txt;
+	foreach my $data (@_) {
+		$data->{key} =~ s/(latex header|latex body)/latex input/i;
+
+		$txt .= $data->{key} . ': ' . $data->{value} . "\n";
+	}
+
+	return $txt;
+}
+
+
+my %options;
+GetOptions( \%options,
+		'doc-class=s',
+		'format=s',
+		'help',
+		'man',
+		'override!',
+		'verbose!',
+) || pod2usage( '-message' => 'invalid option', '-exitval' => 2 );
+
+if ($options{help} || $options{man}) {
+	pod2usage( '-verbose' => 2, '-exitval' => 0 );
+}
+
+my $format = $options{format};
+if (!$format) {
+	if ($0 =~ /mmdtopdf$/) {
+		$format = 'pdf';
+	} else {
+		$format = 'ps';
+	}
+}
+
+my $user_cfg_file = $ENV{'HOME'} . '/.config/mmdtops/config.ini';
+my $master_cfg_file = '/etc/mmdtops.ini';
+
+my $temp_dir = $ENV{'TMPDIR'};
+if (! $temp_dir) {
+	$temp_dir = '/tmp';
+}
+
+my $master_cfg = new Config::IniFiles(
+	'-file'			=>	$master_cfg_file,
+	'-default'		=>	'Defaults',
+	'-fallback'		=>	'Defaults',
+	'-nocase'		=>	1,
+);
+
+if (!$master_cfg) {
+	die "Error reading $master_cfg_file.";
+}
+
+my $cfg;
+
+if (-f "$user_cfg_file") {
+	$cfg = new Config::IniFiles(
+		'-file'			=>	$user_cfg_file,
+		'-fallback'		=>	'Defaults',
+		'-nocase'		=>	1,
+		'-import'		=>	$master_cfg
+	);
+	die "Error reading '$user_cfg_file'" if !$cfg;
+
+} else {
+	$cfg = $master_cfg;
+}
+
+foreach my $prog (keys %bin) {
+	if ($cfg->val('programs', $prog)) {
+		$bin{$prog} = $cfg->val('programs', $prog);
+	}
+}
+
+
+print $cfg->val('Defaults', 'latex mode'), "\n";
+
+use Data::Dumper;
+
+#print Dumper( $cfg );
+
+my $doc_class = $options{'doc-class'};
+
+if (!$doc_class && $cfg->val('defaults', 'document class')) {
+	$doc_class = $cfg->val('defaults', 'document class');
+}
+
+if (!$doc_class) {
+	die "'Document Class' must be defined in configuration.";
+}
+
+my %latex;
+$latex{document_class} = $doc_class;
+if (grep { $_ =~ /^$doc_class$/i } $cfg->Sections()) {
+	my @params = $cfg->Parameters($doc_class);
+	die "No 'LaTeX Header' defined for '$doc_class'" if !grep /latex header/i, @params;
+	die "No 'LaTeX Body' defined for '$doc_class'" if !grep /latex body/i, @params;
+}
+
+my $file = shift @ARGV;
+
+open my $FILE, '<', $file;
+binmode $FILE, ':utf8';
+
+my @file_meta;
+my $in_meta = 1;
+my $first_line = 1;
+my $markdown;
+
+while (<$FILE>) {
+	chomp;
+
+	if (!$in_meta) {
+		$markdown .= "$_\n";
+
+	} elsif (/^\s*$/) {
+		$in_meta = 0;
+
+	} elsif (/^(\w+[^:]+?)\s*:\s*(.+)$/) {
+		push @file_meta, { key => $1, value => $2 };
+
+	} elsif ($first_line) {
+		$in_meta = 0;
+		$markdown = "$_\n";
+
+	} elsif (/^\s+(\S.*)$/) {
+		$file_meta[-1]->{value} .= ' ' . $1;
+	}
+
+	$first_line = 0;
+}
+
+close $FILE;
+
+# if override is specified remove all LaTeX command from the file's header
+if ($options{override}) {
+	@file_meta = grep { ! /latex /i } @file_meta;
+}
+
+foreach my $default (@defaults) {
+	if ((!grep {$_->{key} =~ /$default/i} @file_meta) && $cfg->val('defaults', $default)) {
+		push @file_meta, build_meta_hash($default, $cfg->val('defaults', $default));
+	}
+}
+
+my @meta;
+
+if (!grep { $_->{key} =~ /^latex/i } @file_meta) {
+	foreach my $key (@order) {
+		if ($key eq '__FILE_META__') {
+			push @meta, @file_meta;
+
+		} elsif ($cfg->val($doc_class, $key)) {
+			push @meta, build_meta_hash($key, $cfg->val($doc_class, $key));
+		}
+	}
+}
+
+if ($options{verbose}) {
+	print STDERR build_meta_header( @meta );
+	#print STDERR Dumper( \@meta );
+}
+
+my $tmp = File::Temp->new( TEMPLATE => 'mmdtops-XXXXXX', DIR => $temp_dir );
+binmode $tmp, ':utf8';
+
+print $tmp build_meta_header( @meta );
+
+print $tmp "\n";
+
+print $tmp $markdown;
+
+close $tmp;
+
+my $fn = $tmp->filename;
+
+my $latex_bin = $bin{pslatex};
+if ($format eq 'pdf') {
+	$latex_bin = $bin{pdflatex};
+}
+
+if (system(qq["$bin{multimarkdown}" -t latex "$fn" > "$fn.tex"]) == 0) {
+	if (system(qq[cd "$temp_dir" && "$latex_bin" "$fn.tex" &> /dev/null]) == 0) {
+		my $file;
+		if ($format eq 'ps') {
+			system(qq[cd "$temp_dir" && "$bin{dvips}" -o "$fn.ps" "$fn.dvi" &> /dev/null]);
+			$file = "$fn.ps";
+		} else {
+			$file = "$fn.pdf";
+		}
+		if (open my $PDF, '<', "$file") {
+			open my $OUT, '>';
+			while (!eof($PDF)) {
+				my $block;
+				read($PDF, $block, 4096);
+				print $block;
+			}
+			close $PDF;
+			close $OUT;
+
+			`rm "$fn.*"`;
+		}
+	}
+}
+
+
+=head1 NAME
+
+mmdtops, mmdtopdf
+
+
+=head1 SYNOPSIS
+
+mmdtops [options] <multimarkdown file>
+
+
+=head1 DESCRIPTION
+
+C<mmdtops> is a wrapper program that calls the multimarkdown program
+and pslatex to perform processing of multimarkdown files.  The
+multimarkdown file is converted to PostScript or PDF using the
+settings defined in /etc/mmdtops.ini and ~/.config/mmdtops.ini.  The
+configuration files allow you to set up standard ways of transforming
+the documents so that each document does not need to contain latex
+metadata.
+
+Any settings in a user's configuration file override the global settings
+file.  See the file /etc/mmdtops.ini for more information about available
+settings.
+
+=head1 OPTIONS
+
+=over
+
+=item B<--doc-class>=<class name>
+
+this should be a document class defined in /etc/mmdtops.ini.  The standard
+classes are article, handout, beamer, letterhead, and memoir.  If this is
+not specifed, the document class specified in the configuration files is
+used.
+
+=item B<--format>=ps|pdf
+
+specifies the output format as either ps for PostScript or pdf for the
+Portable Document Format
+
+=item B<--help>
+
+display this help screen
+
+=item B<--override>
+
+override the latex metadata specified in the file.  All metadata relating
+to LaTeX in the file to be transformed is discarded.
+
+=item B<--verbose>
+
+display more information on the transformation
+
+=back
+
+=head1 SEE ALSO
+
+L<multimarkdown>, L<pslatex>, and L<pdflatex>
+
+=head1 AUTHOR
+
+John Supplee
