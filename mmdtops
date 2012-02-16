@@ -82,7 +82,7 @@ if (!$format) {
 	}
 }
 
-my $user_cfg_file = $ENV{'HOME'} . '/.config/mmdtops/config.ini';
+my $user_cfg_file = $ENV{'HOME'} . '/.config/mmdtops.ini';
 my $master_cfg_file = '/etc/mmdtops.ini';
 
 my $temp_dir = $ENV{'TMPDIR'};
