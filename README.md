@@ -46,6 +46,14 @@ Configuration of the program is accomplished by `/etc/mmdtops.ini` and
 local user configuration files in `~/.config/mmdtops.ini`.  See the
 `/etc/mmdtops.ini` for details on configuration values.
 
+# Security Issues
+
+The program creates temporary files while processing in the directory
+given in the `$TMPDIR` environment variable.  If `$TMPDIR` is undefined
+the temporary directory defaults to `/tmp`.  If the program were to fail
+for some reason, it is possible that copies of your files would remain
+in the temporary directory.
+
 # See Also
 
 github repositories for:

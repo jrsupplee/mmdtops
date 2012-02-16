@@ -211,7 +211,16 @@ if ($options{verbose}) {
 	#print STDERR Dumper( \@meta );
 }
 
-my $tmp = File::Temp->new( TEMPLATE => 'mmdtops-XXXXXX', DIR => $temp_dir );
+my $work_dir = File::Temp->newdir( 'mmdtops-XXXXXX', DIR => $temp_dir );
+
+mkdir $work_dir;
+
+my $fn = "$work_dir/out";
+
+die "Failure creating temporary directory." if !$work_dir;
+
+open my $tmp, '>', "$fn.mmd";
+
 binmode $tmp, ':utf8';
 
 print $tmp build_meta_header( @meta );
@@ -222,18 +231,17 @@ print $tmp $markdown;
 
 close $tmp;
 
-my $fn = $tmp->filename;
 
 my $latex_bin = $bin{pslatex};
 if ($format eq 'pdf') {
 	$latex_bin = $bin{pdflatex};
 }
 
-if (system(qq["$bin{multimarkdown}" -t latex "$fn" > "$fn.tex"]) == 0) {
-	if (system(qq[cd "$temp_dir" && "$latex_bin" "$fn.tex" &> /dev/null]) == 0) {
+if (system(qq["$bin{multimarkdown}" -t latex "$fn.mmd" > "$fn.tex"]) == 0) {
+	if (system(qq[cd "$work_dir" && "$latex_bin" "$fn.tex" &> /dev/null]) == 0) {
 		my $file;
 		if ($format eq 'ps') {
-			system(qq[cd "$temp_dir" && "$bin{dvips}" -o "$fn.ps" "$fn.dvi" &> /dev/null]);
+			system(qq[cd "$work_dir" && "$bin{dvips}" -o "$fn.ps" "$fn.dvi" &> /dev/null]);
 			$file = "$fn.ps";
 		} else {
 			$file = "$fn.pdf";
@@ -247,8 +255,6 @@ if (system(qq["$bin{multimarkdown}" -t latex "$fn" > "$fn.tex"]) == 0) {
 			}
 			close $PDF;
 			close $OUT;
-
-			`rm "$fn.*"`;
 		}
 	}
 }
