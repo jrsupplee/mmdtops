@@ -30,7 +30,7 @@ my @order = (
 my %bin = (
 	multimarkdown 	=>	'multimarkdown',
 	pdflatex		=>	'pdflatex',
-	pslatex			=>	'pslatex',
+	latex			=>	'latex',
 	dvips			=>	'dvips',
 );
 
@@ -193,6 +193,15 @@ foreach my $default (@defaults) {
 	}
 }
 
+if (!grep {$_->{key} =~ /^title$/i } @file_meta) {
+	my $title = $file;
+	$title =~ s/\.[^\.]+$//;
+	if ($title =~ m|/([^/]+)$|) {
+		$title = $1;
+	}
+	unshift @file_meta, build_meta_hash( 'Title', $title );
+}
+
 my @meta;
 
 if (!grep { $_->{key} =~ /^latex/i } @file_meta) {
@@ -211,7 +220,7 @@ if ($options{verbose}) {
 	#print STDERR Dumper( \@meta );
 }
 
-my $work_dir = File::Temp->newdir( 'mmdtops-XXXXXX', DIR => $temp_dir );
+my $work_dir = File::Temp->newdir( 'mmdtops-XXXXXX', DIR => $temp_dir, CLEANUP => 0 );
 
 mkdir $work_dir;
 
@@ -232,13 +241,13 @@ print $tmp $markdown;
 close $tmp;
 
 
-my $latex_bin = $bin{pslatex};
+my $latex_bin = $bin{latex};
 if ($format eq 'pdf') {
 	$latex_bin = $bin{pdflatex};
 }
 
 if (system(qq["$bin{multimarkdown}" -t latex "$fn.mmd" > "$fn.tex"]) == 0) {
-	if (system(qq[cd "$work_dir" && "$latex_bin" "$fn.tex" &> /dev/null]) == 0) {
+	if (system(qq[cd "$work_dir" && $latex_bin "$fn.tex" &> /dev/null]) == 0) {
 		my $file;
 		if ($format eq 'ps') {
 			system(qq[cd "$work_dir" && "$bin{dvips}" -o "$fn.ps" "$fn.dvi" &> /dev/null]);
@@ -273,7 +282,7 @@ mmdtops [options] <multimarkdown file>
 =head1 DESCRIPTION
 
 C<mmdtops> is a wrapper program that calls the multimarkdown program
-and pslatex to perform processing of multimarkdown files.  The
+and LaTeX to perform processing of multimarkdown files.  The
 multimarkdown file is converted to PostScript or PDF using the
 settings defined in /etc/mmdtops.ini and ~/.config/mmdtops.ini.  The
 configuration files allow you to set up standard ways of transforming
